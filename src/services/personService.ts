@@ -16,9 +16,28 @@ export interface Person {
 // Never store raw national ID / phone numbers — only a salted hash, so the
 // record is verifiable (same input always produces the same hash, so
 // duplicate-registration checks still work) without holding the raw PII.
+//
+// The dev fallback below is intentionally public (it's in this repo's
+// history) — fine for local development, but it means anyone can
+// precompute hashes for known IDs and de-anonymize this column. In
+// production ID_HASH_SALT MUST be set to a real secret, or startup fails.
+const DEV_SALT = "africore-dev-salt";
+
+function getSalt(): string {
+  const salt = process.env.ID_HASH_SALT;
+  if (!salt) {
+    if (process.env.NODE_ENV === "production") {
+      throw new Error(
+        "ID_HASH_SALT is not set. Refusing to start in production with the public dev salt — see .env.example."
+      );
+    }
+    return DEV_SALT;
+  }
+  return salt;
+}
+
 function hashIdentifier(value: string): string {
-  const salt = process.env.ID_HASH_SALT || "africore-dev-salt";
-  return crypto.createHash("sha256").update(`${salt}:${value}`).digest("hex");
+  return crypto.createHash("sha256").update(`${getSalt()}:${value}`).digest("hex");
 }
 
 export function createPerson(input: { full_name: string; national_id?: string; phone?: string }): Person {
