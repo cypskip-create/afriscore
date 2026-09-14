@@ -6,11 +6,13 @@ import personRoutes from "./routes/persons";
 import clientRoutes from "./routes/clients";
 import businessDataRoutes from "./routes/businessData";
 import webhookRoutes from "./routes/webhooks";
+import { rateLimit } from "./middleware/rateLimit";
 
 migrate();
 
 const app = express();
 app.use(express.json());
+app.use(rateLimit);
 
 // --- API Gateway concerns ---
 app.use((req, res, next) => {
@@ -21,7 +23,7 @@ app.use((req, res, next) => {
   next();
 });
 
-app.get("/v1/health", (_req, res) => res.json({ status: "ok", service: "africore", phase: 2 }));
+app.get("/v1/health", (_req, res) => res.json({ status: "ok", service: "africore", phase: 3 }));
 
 app.use("/v1/businesses", businessRoutes);
 app.use("/v1/businesses/:id", businessDataRoutes); // accounts/transactions/financial-profile
@@ -34,5 +36,5 @@ app.use((req, res) => res.status(404).json({ error: "not_found", path: req.origi
 
 const PORT = process.env.PORT || 4000;
 app.listen(PORT, () => {
-  console.log(`AfriCore (Phase 2) listening on :${PORT}`);
+  console.log(`AfriCore (Phase 3) listening on :${PORT}`);
 });

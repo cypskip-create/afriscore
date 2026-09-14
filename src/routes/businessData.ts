@@ -5,6 +5,8 @@ import { syncAccountTransactions, listTransactionsForBusiness } from "../service
 import { computeFinancialProfile } from "../services/analyticsService";
 import { isConsentActive } from "../services/consentService";
 import { requireApiKey, AuthedRequest } from "../middleware/apiKeyAuth";
+import { createInvoice, listInvoicesForBusiness } from "../services/invoiceService";
+import { reconcileBusiness } from "../services/reconciliationService";
 
 type BizParams = { id: string; accountId: string };
 type BizRequest = Request<BizParams>;
@@ -58,6 +60,41 @@ router.get("/financial-profile", requireApiKey, (req: AuthedRequest & BizRequest
     return res.status(403).json({ error: "consent_required", detail: "No active consent for this grantee" });
   }
   res.json(computeFinancialProfile(req.params.id));
+});
+
+// === Phase 3: Business Operations ===
+
+const invoiceSchema = z.object({
+  customer_reference: z.string().min(1),
+  amount: z.number().positive(),
+  due_date: z.string().optional(),
+});
+
+// POST /v1/businesses/:id/invoices
+router.post("/invoices", (req: BizRequest, res) => {
+  const parsed = invoiceSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: "invalid_input", details: parsed.error.flatten() });
+
+  try {
+    const invoice = createInvoice({ business_id: req.params.id, ...parsed.data });
+    res.status(201).json(invoice);
+  } catch (e: any) {
+    if (e.message === "business_not_found") return res.status(404).json({ error: "not_found" });
+    throw e;
+  }
+});
+
+// GET /v1/businesses/:id/invoices?status=unpaid
+router.get("/invoices", (req: BizRequest, res) => {
+  const status = req.query.status ? String(req.query.status) : undefined;
+  res.json(listInvoicesForBusiness(req.params.id, status));
+});
+
+// POST /v1/businesses/:id/reconcile — the reconciliation engine (spec section 18).
+// Matches unpaid invoices to unmatched completed credit transactions by amount.
+router.post("/reconcile", async (req: BizRequest, res) => {
+  const result = await reconcileBusiness(req.params.id);
+  res.json(result);
 });
 
 export default router;

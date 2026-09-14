@@ -127,5 +127,35 @@ export function migrate() {
     );
 
     CREATE INDEX IF NOT EXISTS idx_webhook_events_type ON webhook_events (event_type, created_at);
+
+    -- === Phase 3: Business Operations ===
+    CREATE TABLE IF NOT EXISTS invoices (
+      id TEXT PRIMARY KEY,
+      business_id TEXT NOT NULL,
+      customer_reference TEXT NOT NULL,
+      amount REAL NOT NULL,
+      currency TEXT DEFAULT 'KES',
+      issue_date TEXT NOT NULL,
+      due_date TEXT,
+      status TEXT DEFAULT 'unpaid',       -- unpaid | paid | overdue
+      matched_transaction_id TEXT,
+      created_at TEXT NOT NULL,
+      paid_at TEXT
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_invoices_business ON invoices (business_id, status);
   `);
+
+  // Lightweight migration guard: adds columns to tables that may already
+  // exist from an earlier version of the schema, without needing a full
+  // migration framework at this stage. Safe to run on every boot.
+  const transactionCols = db.prepare(`PRAGMA table_info(transactions)`).all() as { name: string }[];
+  if (!transactionCols.some((c) => c.name === "matched_invoice_id")) {
+    db.exec(`ALTER TABLE transactions ADD COLUMN matched_invoice_id TEXT`);
+  }
+
+  const webhookSubCols = db.prepare(`PRAGMA table_info(webhook_subscriptions)`).all() as { name: string }[];
+  if (!webhookSubCols.some((c) => c.name === "secret")) {
+    db.exec(`ALTER TABLE webhook_subscriptions ADD COLUMN secret TEXT`);
+  }
 }

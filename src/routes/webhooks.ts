@@ -15,11 +15,12 @@ router.post("/", requireApiKey, (req: AuthedRequest, res) => {
   if (!parsed.success) return res.status(400).json({ error: "invalid_input", details: parsed.error.flatten() });
 
   const sub = subscribe({ client_name: req.client!.name, ...parsed.data });
-  res.status(201).json(sub);
+  res.status(201).json({ ...sub, note: "Store the secret now — verify the x-africore-signature header on deliveries. It will not be shown again." });
 });
 
 router.get("/", requireApiKey, (req: AuthedRequest, res) => {
-  res.json(listSubscriptions(req.client!.name));
+  const subs = listSubscriptions(req.client!.name).map(({ secret, ...rest }) => rest);
+  res.json(subs);
 });
 
 // Debug/sandbox visibility into recently emitted events, per the doc's

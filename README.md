@@ -4,12 +4,13 @@ The identity & trust wedge for AfriCore. Verifies a business, builds a
 tamper-evident trust ledger, computes an explainable trust score, and
 gates access to that record behind explicit consent.
 
-# AfriCore — Phase 1 + Between-Phases + Phase 2
+# AfriCore — Phase 1 + Between-Phases + Phase 2 + Phase 3
 
-Phase 1 built the identity & trust wedge. This adds the hardening that
-sits between phases, plus Phase 2: the Data Infrastructure layer —
-connectors, normalization, a unified transaction model, and the
-financial-profile API.
+Phase 1 built the identity & trust wedge. Between-phases hardened it
+with real API-key auth. Phase 2 added the Data Infrastructure layer —
+connectors, normalization, transactions, financial profile. This adds
+Phase 3: **Business Operations** (invoices + the reconciliation
+engine) plus gateway hardening (rate limiting, signed webhooks).
 
 ## What's built
 
@@ -59,14 +60,31 @@ financial-profile API.
   get an API key; that's the seed of the fuller dashboard from the
   spec (usage, billing, sandbox UI — still not built).
 
-## Not built yet (Phase 3+)
+### Phase 3 — Business Operations
+- **Invoice Service** (`invoiceService.ts`) — create/list invoices per business
+- **Reconciliation Engine** (`reconciliationService.ts`) — the spec's
+  section-18 feature: matches unpaid invoices to unmatched completed
+  credit transactions by exact amount, marks the invoice paid, links
+  the transaction, logs it to the ledger, fires an `invoice.paid`
+  webhook. Deliberately simple matching for Phase 3 (exact amount,
+  oldest transaction first) — fuzzy/partial matching is a next step.
+- **Rate limiting** (`middleware/rateLimit.ts`) — in-memory fixed-window
+  limiter, 120 req/min per API key (or IP if unauthenticated). Swap for
+  a Redis-backed limiter before running multiple instances.
+- **Signed webhooks** — every subscription now gets a per-subscription
+  HMAC secret (`whsec_...`, shown once at subscribe time, never
+  re-exposed). Every delivery includes an `x-africore-signature` header
+  so a partner can verify the webhook actually came from AfriCore.
+
+## Not built yet (Phase 4+)
 
 Real KRA/M-Pesa/bank institutional integrations (still simulated),
-Invoice/Payment/Payroll/Inventory primitives, Risk/Analytics beyond the
-basic financial profile, AI Service, Billing, PostgreSQL migration
-(still SQLite — swap `better-sqlite3` for `pg` in `db/index.ts` when
-ready; the schema was written to be portable), full sandbox namespace
-with simulated failure scenarios, rate limiting, webhook signing.
+Payroll/Inventory primitives, Risk/Analytics beyond the basic financial
+profile, AI Service, Billing, PostgreSQL migration (still SQLite — swap
+`better-sqlite3` for `pg` in `db/index.ts` when ready; the schema was
+written to be portable), full sandbox namespace with simulated failure
+scenarios, fuzzy/partial-payment reconciliation matching, Redis-backed
+rate limiting for multi-instance deployments.
 
 ## Run it
 
@@ -107,10 +125,15 @@ npm start
 - `GET /v1/webhooks` 🔒 — list your subscriptions
 - `GET /v1/webhooks/events?event_type=` 🔒 — see recently emitted events (sandbox visibility)
 
+### Business Operations
+- `POST /v1/businesses/:id/invoices` — `{customer_reference, amount, due_date?}`
+- `GET /v1/businesses/:id/invoices?status=unpaid` — list, optionally filtered
+- `POST /v1/businesses/:id/reconcile` — run matching, returns `{matched, unmatched_invoices}`
+
 ## Next build steps
 
 1. Swap simulated connectors for real KRA / M-Pesa Daraja / bank open-banking calls
 2. PostgreSQL migration for production deployment
-3. Rate limiting + webhook signing (HMAC) on the gateway
-4. Invoice/Payment primitives + the reconciliation engine (spec section 18)
-5. A proper sandbox namespace with simulate-failure scenarios, separate from live data
+3. Fuzzy/partial-payment reconciliation matching (amount tolerance, counterparty matching, split payments)
+4. A proper sandbox namespace with simulate-failure scenarios, separate from live data
+5. Redis-backed rate limiting once running more than one instance

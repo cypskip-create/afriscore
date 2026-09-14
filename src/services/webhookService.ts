@@ -1,3 +1,4 @@
+import crypto from "crypto";
 import { v4 as uuid } from "uuid";
 import { db } from "../db";
 
@@ -8,6 +9,7 @@ interface WebhookSubscription {
   target_url: string;
   status: string;
   created_at: string;
+  secret: string;
 }
 
 function matchesPattern(eventType: string, pattern: string): boolean {
@@ -16,6 +18,10 @@ function matchesPattern(eventType: string, pattern: string): boolean {
   return false;
 }
 
+/** Generates a per-subscription signing secret, returned once at subscribe
+ *  time. Every delivery to this subscription is signed with it so the
+ *  receiver can verify the webhook actually came from AfriCore and wasn't
+ *  forged or replayed with tampered contents. */
 export function subscribe(input: { client_name: string; event_pattern: string; target_url: string }): WebhookSubscription {
   const sub: WebhookSubscription = {
     id: uuid(),
@@ -24,10 +30,11 @@ export function subscribe(input: { client_name: string; event_pattern: string; t
     target_url: input.target_url,
     status: "active",
     created_at: new Date().toISOString(),
+    secret: `whsec_${crypto.randomBytes(24).toString("hex")}`,
   };
   db.prepare(
-    `INSERT INTO webhook_subscriptions (id, client_name, event_pattern, target_url, status, created_at)
-     VALUES (@id, @client_name, @event_pattern, @target_url, @status, @created_at)`
+    `INSERT INTO webhook_subscriptions (id, client_name, event_pattern, target_url, status, created_at, secret)
+     VALUES (@id, @client_name, @event_pattern, @target_url, @status, @created_at, @secret)`
   ).run(sub);
   return sub;
 }
@@ -39,12 +46,16 @@ export function listSubscriptions(clientName?: string): WebhookSubscription[] {
   return db.prepare(`SELECT * FROM webhook_subscriptions`).all() as WebhookSubscription[];
 }
 
+function sign(secret: string, body: string): string {
+  return crypto.createHmac("sha256", secret).update(body).digest("hex");
+}
+
 /**
  * Records the event (always, for audit/debugging via GET /v1/webhook-events)
- * and attempts best-effort delivery to any matching active subscription.
- * Delivery failures never throw — webhook delivery must not break the
- * operation that triggered the event (e.g. a transaction sync should
- * succeed even if a partner's endpoint is down).
+ * and attempts best-effort, signed delivery to any matching active
+ * subscription. Delivery failures never throw — webhook delivery must not
+ * break the operation that triggered the event (e.g. a transaction sync
+ * should succeed even if a partner's endpoint is down).
  */
 export async function emitEvent(eventType: string, payload: object): Promise<void> {
   const id = uuid();
@@ -59,11 +70,17 @@ export async function emitEvent(eventType: string, payload: object): Promise<voi
   const subs = listSubscriptions().filter((s) => s.status === "active" && matchesPattern(eventType, s.event_pattern));
 
   for (const sub of subs) {
+    const body = JSON.stringify({ event: eventType, data: payload, id });
+    const signature = sign(sub.secret, body);
+
     try {
       await fetch(sub.target_url, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ event: eventType, data: payload, id }),
+        headers: {
+          "Content-Type": "application/json",
+          "x-africore-signature": signature,
+        },
+        body,
       });
       db.prepare(`UPDATE webhook_events SET delivery_attempts = delivery_attempts + 1, last_delivery_status = 'delivered' WHERE id = ?`).run(id);
     } catch (err) {
