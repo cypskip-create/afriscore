@@ -2,6 +2,8 @@ import { Router } from "express";
 import { z } from "zod";
 import { createBusiness, getBusiness, runVerificationChecks, getTrustRecord } from "../services/businessService";
 import { isConsentActive } from "../services/consentService";
+import { verifyChainIntegrity } from "../services/ledgerService";
+import { requireApiKey, AuthedRequest } from "../middleware/apiKeyAuth";
 
 const router = Router();
 
@@ -38,19 +40,24 @@ router.post("/:id/verify", (req, res) => {
 });
 
 // Trust record — this is the endpoint a partner platform (lender, marketplace,
-// delivery app) actually calls. Gated by consent: the grantee (identified via
-// x-client-id header for this MVP) must have an active consent grant.
-router.get("/:id/trust-record", (req, res) => {
-  const grantee = req.header("x-client-id");
-  if (!grantee) return res.status(401).json({ error: "missing_client_id", detail: "Set x-client-id header" });
-
-  if (!isConsentActive("business", req.params.id, grantee)) {
+// delivery app) actually calls. Gated by consent: the calling client (proven by
+// its API key, not a self-declared header) must have an active consent grant.
+router.get("/:id/trust-record", requireApiKey, (req: AuthedRequest, res) => {
+  if (!isConsentActive("business", req.params.id, req.client!.name)) {
     return res.status(403).json({ error: "consent_required", detail: "No active consent for this grantee" });
   }
 
   const record = getTrustRecord(req.params.id);
   if (!record) return res.status(404).json({ error: "not_found" });
   res.json(record);
+});
+
+// Public integrity proof — deliberately unauthenticated. Doesn't leak business
+// data, just confirms the hash chain hasn't been tampered with. Useful as a
+// standalone trust demo for a partner evaluating the platform.
+router.get("/:id/ledger/verify", (req, res) => {
+  const result = verifyChainIntegrity("business", req.params.id);
+  res.json(result);
 });
 
 export default router;

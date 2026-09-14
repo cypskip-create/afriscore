@@ -62,5 +62,70 @@ export function migrate() {
     );
 
     CREATE INDEX IF NOT EXISTS idx_consents_subject ON consents (subject_type, subject_id);
+
+    -- === Between-phases hardening: real API client/key auth ===
+    CREATE TABLE IF NOT EXISTS api_clients (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL UNIQUE,
+      api_key_hash TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
+
+    -- === Phase 2: Data Infrastructure ===
+
+    -- A connected data source (M-Pesa, bank, POS, ...) for a business.
+    CREATE TABLE IF NOT EXISTS accounts (
+      id TEXT PRIMARY KEY,
+      business_id TEXT NOT NULL,
+      provider TEXT NOT NULL,             -- 'mpesa' | 'bank' | 'pos'
+      account_identifier TEXT NOT NULL,   -- masked/display identifier only
+      status TEXT DEFAULT 'connected',    -- connected | disconnected
+      connected_at TEXT NOT NULL,
+      disconnected_at TEXT
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_accounts_business ON accounts (business_id);
+
+    -- Canonical transaction shape. Every provider's raw payload gets mapped
+    -- into this schema by the Normalization Service before storage.
+    CREATE TABLE IF NOT EXISTS transactions (
+      id TEXT PRIMARY KEY,
+      account_id TEXT NOT NULL,
+      business_id TEXT NOT NULL,
+      external_id TEXT NOT NULL,          -- provider's own transaction id, for dedup
+      amount REAL NOT NULL,
+      currency TEXT DEFAULT 'KES',
+      type TEXT NOT NULL,                 -- 'credit' | 'debit'
+      counterparty TEXT,
+      category TEXT,
+      status TEXT NOT NULL,               -- normalized: 'completed' | 'failed' | 'pending'
+      source_provider TEXT NOT NULL,
+      raw_status TEXT,                    -- original provider status string, kept for audit
+      occurred_at TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      UNIQUE (account_id, external_id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_transactions_business ON transactions (business_id, occurred_at);
+
+    CREATE TABLE IF NOT EXISTS webhook_subscriptions (
+      id TEXT PRIMARY KEY,
+      client_name TEXT NOT NULL,
+      event_pattern TEXT NOT NULL,        -- exact event type, or 'event.*' prefix match
+      target_url TEXT NOT NULL,
+      status TEXT DEFAULT 'active',
+      created_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS webhook_events (
+      id TEXT PRIMARY KEY,
+      event_type TEXT NOT NULL,
+      payload TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      delivery_attempts INTEGER DEFAULT 0,
+      last_delivery_status TEXT
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_webhook_events_type ON webhook_events (event_type, created_at);
   `);
 }
