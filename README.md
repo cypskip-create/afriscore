@@ -4,15 +4,17 @@ The identity & trust wedge for AfriCore. Verifies a business, builds a
 tamper-evident trust ledger, computes an explainable trust score, and
 gates access to that record behind explicit consent.
 
-# AfriCore — Phase 1 through 5
+# AfriCore — Phase 1 through 6
 
 Phase 1 built the identity & trust wedge. Between-phases hardened it
 with real API-key auth. Phase 2 added Data Infrastructure. Phase 3
 added Business Operations (invoices + reconciliation) plus gateway
-hardening. Phase 4 added Business Intelligence. This adds Phase 5:
-a natural-language **query layer** over the Insights Service, and a
-genuine **PostgreSQL migration** — tested end to end against a real
-Postgres instance, not just documented.
+hardening. Phase 4 added Business Intelligence. Phase 5 added a
+natural-language query layer and a real PostgreSQL migration. This
+adds Phase 6: **fuzzy reconciliation matching** (fees, rounding, and
+installment payments) and the **first automated test suite** — 22
+tests, including ones that actively simulate database tampering to
+prove the trust ledger catches it.
 
 ## What's built
 
@@ -124,16 +126,49 @@ Postgres instance, not just documented.
   layer, ledger integrity, and re-sync deduplication via `ON CONFLICT`)
   ran clean on both SQLite and Postgres with identical results.
 
-## Not built yet (Phase 6+)
+### Phase 6 — Fuzzy Reconciliation + Tests
+- **Three-strategy matching** (`reconciliationService.ts`), tried in
+  descending confidence order:
+  - `exact` (confidence 1.0) — one transaction matching to the cent
+  - `tolerance` (0.9) — one transaction within 2% of the invoice,
+    capped at KES 100. Real payments rarely land exactly: M-Pesa
+    charges, bank fees and rounding all shave a little off. The
+    shortfall is recorded in the match note and on the ledger rather
+    than silently absorbed.
+  - `partial` (0.75) — several transactions summing to the invoice
+    within tolerance, i.e. installment payments. Capped at
+    combinations of 4 across 40 candidates, since subset-sum is
+    exponential and an unbounded search would stall the request on a
+    business with a busy till.
+  - A payment can only ever settle one invoice (claimed within a run
+    and persisted via `matched_invoice_id`), and unmatched invoices
+    now return a machine-readable `reason` instead of a bare ID.
+  - `findMatch()` is deliberately pure (no DB access) so the matching
+    logic is directly unit-testable.
+- **Test suite** (`src/__tests__/`) — 22 tests via Node's built-in
+  runner, no extra dependencies. Run with `npm test`.
+  - `ledger.test.ts` — the ones that matter most: two tests actively
+    tamper with the database (editing a stored trust score, deleting a
+    middle entry) and assert the chain detects it and names the broken
+    entry. The product's core claim, now verified rather than asserted.
+  - `reconciliation.test.ts` — all three strategies, the tolerance cap
+    on large invoices, preference ordering, and the null cases.
+  - `normalization.test.ts` — including a test asserting M-Pesa `CR`
+    and bank `CREDIT`/`COMPLETED` produce *identical* canonical output,
+    which is the entire justification for the normalization layer.
+
+## Not built yet (Phase 7+)
 
 Real KRA/M-Pesa/bank institutional integrations (still simulated —
 needs partnerships, not code), Payroll/Inventory primitives, a real
 LLM wired into the query layer for broader natural-language coverage,
 Billing, full sandbox namespace with simulated failure scenarios,
-fuzzy/partial-payment reconciliation matching, Redis-backed rate
-limiting for multi-instance deployments, a proper migration framework
-(the current guard in `db/index.ts` is fine for two extra columns but
-won't scale past a handful of schema changes).
+Redis-backed rate limiting for multi-instance deployments, a proper
+migration framework (the current guard in `db/index.ts` is fine for
+two extra columns but won't scale past a handful of schema changes),
+and integration tests covering the HTTP layer end to end (current
+tests cover services and pure logic; route-level behaviour is still
+verified manually).
 
 ## Run it
 
@@ -144,6 +179,12 @@ npm start
 # server on :4000
 # No DATABASE_URL set -> SQLite file at ./africore.db
 # DATABASE_URL set     -> PostgreSQL (tested against a real instance)
+```
+
+## Test it
+
+```bash
+npm test   # builds, then runs 22 tests via Node's built-in runner
 ```
 
 ## API — everything under `/v1`
@@ -179,7 +220,12 @@ npm start
 ### Business Operations
 - `POST /v1/businesses/:id/invoices` — `{customer_reference, amount, due_date?}`
 - `GET /v1/businesses/:id/invoices?status=unpaid` — list, optionally filtered
-- `POST /v1/businesses/:id/reconcile` — run matching, returns `{matched, unmatched_invoices}`
+- `POST /v1/businesses/:id/reconcile` — run matching. Returns
+  `{matched, unmatched_invoices}`, where each match carries
+  `match_type` (`exact`|`tolerance`|`partial`), a `confidence` score,
+  the `transaction_ids` that settled it, and a `note` explaining any
+  shortfall — so low-confidence matches can be audited rather than
+  trusted blindly.
 
 ### Business Intelligence
 - `GET /v1/businesses/:id/insights` 🔒 + consent — bundles all four:
@@ -197,7 +243,8 @@ npm start
 
 1. Swap simulated connectors for real KRA / M-Pesa Daraja / bank open-banking calls (needs institutional partnerships first)
 2. Wire a real LLM into the query layer for broader natural-language coverage (swap `matchIntent()` in `queryService.ts` — the data layer underneath doesn't need to change)
-3. Fuzzy/partial-payment reconciliation matching (amount tolerance, counterparty matching, split payments)
-4. A proper sandbox namespace with simulate-failure scenarios, separate from live data
-5. Redis-backed rate limiting once running more than one instance
-6. A real migration framework once schema changes outgrow the current PRAGMA-guard approach
+3. Counterparty-name matching to raise confidence on tolerance/partial matches
+4. Route-level integration tests (services and pure logic are covered; HTTP layer still manual)
+5. A proper sandbox namespace with simulate-failure scenarios, separate from live data
+6. Redis-backed rate limiting once running more than one instance
+7. A real migration framework once schema changes outgrow the current PRAGMA-guard approach
