@@ -8,7 +8,8 @@
     "build": "tsc",
     "start": "node dist/index.js",
     "dev": "ts-node src/index.ts",
-    "test": "npm run build && node --test \"dist/__tests__/*.test.js\""
+    "test": "npm run build && node --test --test-concurrency=1 \"dist/__tests__/*.test.js\"",
+    "pretest": "rm -f test-*.db test-*.db-shm test-*.db-wal"
   },
   "dependencies": {
     "better-sqlite3": "^11.3.0",

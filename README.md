@@ -4,17 +4,18 @@ The identity & trust wedge for AfriCore. Verifies a business, builds a
 tamper-evident trust ledger, computes an explainable trust score, and
 gates access to that record behind explicit consent.
 
-# AfriCore — Phase 1 through 6
+# AfriCore — Phase 1 through 7
 
 Phase 1 built the identity & trust wedge. Between-phases hardened it
 with real API-key auth. Phase 2 added Data Infrastructure. Phase 3
 added Business Operations (invoices + reconciliation) plus gateway
 hardening. Phase 4 added Business Intelligence. Phase 5 added a
 natural-language query layer and a real PostgreSQL migration. This
-adds Phase 6: **fuzzy reconciliation matching** (fees, rounding, and
-installment payments) and the **first automated test suite** — 22
-tests, including ones that actively simulate database tampering to
-prove the trust ledger catches it.
+added Phase 6: fuzzy reconciliation matching and the first automated
+test suite. This adds Phase 7: **route-level integration tests** —
+closing the gap where auth and consent gating had only ever been
+verified by hand. 42 tests total now, including ones that actively
+simulate database tampering and consent-bypass attempts.
 
 ## What's built
 
@@ -157,7 +158,29 @@ prove the trust ledger catches it.
     and bank `CREDIT`/`COMPLETED` produce *identical* canonical output,
     which is the entire justification for the normalization layer.
 
-## Not built yet (Phase 7+)
+### Phase 7 — API Integration Tests
+- **`app.ts` split out from `index.ts`** — the Express app is now built
+  by a `createApp()` factory that binds no port, so tests drive the real
+  HTTP stack in-process (routing, auth middleware, consent gating,
+  status codes) instead of shelling out to curl against a live server.
+  `index.ts` keeps only `migrate()` + `listen()`.
+- **`api.test.ts`** — 20 route-level tests. The ones that matter:
+  - trust-record rejects no key / forged key / valid key without consent
+  - revoking consent cuts off access immediately
+  - client A's consent grants client B nothing (consent is per-grantee)
+  - `financial-profile`, `insights` and `ask` all enforce the same gate
+  - API keys and webhook secrets are never re-exposed after creation
+  - a raw national ID never appears in any response body
+  - full pipeline: connect → sync → dedupe on re-sync → tolerance-match
+    an invoice → financial profile
+- **Test isolation fixes** — suites run with `--test-concurrency=1` and a
+  `pretest` cleanup step, because each suite binds its own SQLite file
+  through a module-level singleton and would otherwise race. (The
+  `before` hook deliberately does *not* delete the DB file: the adapter
+  already holds an open handle from import time, and deleting it
+  mid-run causes `SQLITE_IOERR_FSTAT`.)
+
+## Not built yet (Phase 8+)
 
 Real KRA/M-Pesa/bank institutional integrations (still simulated —
 needs partnerships, not code), Payroll/Inventory primitives, a real
@@ -166,9 +189,8 @@ Billing, full sandbox namespace with simulated failure scenarios,
 Redis-backed rate limiting for multi-instance deployments, a proper
 migration framework (the current guard in `db/index.ts` is fine for
 two extra columns but won't scale past a handful of schema changes),
-and integration tests covering the HTTP layer end to end (current
-tests cover services and pure logic; route-level behaviour is still
-verified manually).
+and tests against Postgres specifically (the suite runs on SQLite;
+the Postgres path was verified manually against a live instance).
 
 ## Run it
 
@@ -184,7 +206,7 @@ npm start
 ## Test it
 
 ```bash
-npm test   # builds, then runs 22 tests via Node's built-in runner
+npm test   # builds, then runs 42 tests via Node's built-in runner
 ```
 
 ## API — everything under `/v1`
@@ -244,7 +266,7 @@ npm test   # builds, then runs 22 tests via Node's built-in runner
 1. Swap simulated connectors for real KRA / M-Pesa Daraja / bank open-banking calls (needs institutional partnerships first)
 2. Wire a real LLM into the query layer for broader natural-language coverage (swap `matchIntent()` in `queryService.ts` — the data layer underneath doesn't need to change)
 3. Counterparty-name matching to raise confidence on tolerance/partial matches
-4. Route-level integration tests (services and pure logic are covered; HTTP layer still manual)
+4. Run the test suite against Postgres in CI, not just SQLite
 5. A proper sandbox namespace with simulate-failure scenarios, separate from live data
 6. Redis-backed rate limiting once running more than one instance
 7. A real migration framework once schema changes outgrow the current PRAGMA-guard approach
