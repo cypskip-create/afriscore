@@ -1,6 +1,6 @@
 import crypto from "crypto";
 import { v4 as uuid } from "uuid";
-import { db } from "../db";
+import { dbGet, dbRun } from "../db";
 import { appendEvent, getLedger, verifyChainIntegrity } from "./ledgerService";
 
 export interface Person {
@@ -40,7 +40,7 @@ function hashIdentifier(value: string): string {
   return crypto.createHash("sha256").update(`${getSalt()}:${value}`).digest("hex");
 }
 
-export function createPerson(input: { full_name: string; national_id?: string; phone?: string }): Person {
+export async function createPerson(input: { full_name: string; national_id?: string; phone?: string }): Promise<Person> {
   const now = new Date().toISOString();
   const person: Person = {
     id: uuid(),
@@ -52,13 +52,13 @@ export function createPerson(input: { full_name: string; national_id?: string; p
     updated_at: now,
   };
 
-  db.prepare(
+  await dbRun(
     `INSERT INTO persons (id, full_name, national_id_hash, phone_hash, status, created_at, updated_at)
-     VALUES (@id, @full_name, @national_id_hash, @phone_hash, @status, @created_at, @updated_at)`
-  ).run(person);
+     VALUES (@id, @full_name, @national_id_hash, @phone_hash, @status, @created_at, @updated_at)`,
+    person
+  );
 
-  // Never write raw national_id/phone into the ledger event_data — only the hash.
-  appendEvent("person", person.id, "person.created", {
+  await appendEvent("person", person.id, "person.created", {
     full_name: person.full_name,
     national_id_hash: person.national_id_hash,
   });
@@ -66,23 +66,21 @@ export function createPerson(input: { full_name: string; national_id?: string; p
   return person;
 }
 
-export function getPerson(id: string): Person | undefined {
-  return db.prepare(`SELECT * FROM persons WHERE id = ?`).get(id) as Person | undefined;
+export async function getPerson(id: string): Promise<Person | undefined> {
+  return dbGet<Person>(`SELECT * FROM persons WHERE id = ?`, [id]);
 }
 
 /** Detects if this national ID hash is already registered to a different person. */
-export function findDuplicateByNationalId(nationalIdHash: string, excludePersonId: string): Person | undefined {
-  return db
-    .prepare(`SELECT * FROM persons WHERE national_id_hash = ? AND id != ?`)
-    .get(nationalIdHash, excludePersonId) as Person | undefined;
+export async function findDuplicateByNationalId(nationalIdHash: string, excludePersonId: string): Promise<Person | undefined> {
+  return dbGet<Person>(`SELECT * FROM persons WHERE national_id_hash = ? AND id != ?`, [nationalIdHash, excludePersonId]);
 }
 
-export function runPersonVerification(personId: string): { checks: Record<string, boolean>; duplicate: boolean; person: Person } {
-  const person = getPerson(personId);
+export async function runPersonVerification(personId: string): Promise<{ checks: Record<string, boolean>; duplicate: boolean; person: Person }> {
+  const person = await getPerson(personId);
   if (!person) throw new Error("person_not_found");
 
   const duplicate = person.national_id_hash
-    ? !!findDuplicateByNationalId(person.national_id_hash, personId)
+    ? !!(await findDuplicateByNationalId(person.national_id_hash, personId))
     : false;
 
   const checks = {
@@ -91,30 +89,30 @@ export function runPersonVerification(personId: string): { checks: Record<string
     no_duplicate_national_id: !duplicate,
   };
 
-  appendEvent("person", personId, "verification.checks_run", { checks });
+  await appendEvent("person", personId, "verification.checks_run", { checks });
 
   const passed = Object.values(checks).every(Boolean);
   const newStatus = passed ? "verified" : "pending_verification";
 
   if (newStatus !== person.status) {
-    db.prepare(`UPDATE persons SET status = ?, updated_at = ? WHERE id = ?`).run(
+    await dbRun(`UPDATE persons SET status = ?, updated_at = ? WHERE id = ?`, [
       newStatus,
       new Date().toISOString(),
-      personId
-    );
-    appendEvent("person", personId, "verification.status_changed", { from: person.status, to: newStatus });
+      personId,
+    ]);
+    await appendEvent("person", personId, "verification.status_changed", { from: person.status, to: newStatus });
   }
 
-  return { checks, duplicate, person: getPerson(personId)! };
+  return { checks, duplicate, person: (await getPerson(personId))! };
 }
 
-export function getPersonTrustRecord(personId: string) {
-  const person = getPerson(personId);
+export async function getPersonTrustRecord(personId: string) {
+  const person = await getPerson(personId);
   if (!person) return undefined;
 
   return {
     person,
-    verification_history: getLedger("person", personId),
-    integrity: verifyChainIntegrity("person", personId),
+    verification_history: await getLedger("person", personId),
+    integrity: await verifyChainIntegrity("person", personId),
   };
 }

@@ -8,8 +8,8 @@ import { getLedger } from "./ledgerService";
  *
  * Range: 0-100.
  */
-export function computeTrustScore(businessId: string): number {
-  const entries = getLedger("business", businessId);
+export async function computeTrustScore(businessId: string): Promise<number> {
+  const entries = await getLedger("business", businessId);
 
   const checkEntries = entries.filter((e) => e.event_type === "verification.checks_run");
   let verificationScore = 0;

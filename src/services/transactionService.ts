@@ -1,5 +1,5 @@
 import { v4 as uuid } from "uuid";
-import { db } from "../db";
+import { dbAll, dbRun, isPostgres } from "../db";
 import { getAccount } from "./accountService";
 import { fetchMpesaTransactions, fetchBankTransactions } from "./connectorService";
 import { normalizeMpesaTransaction, normalizeBankTransaction, CanonicalTransaction } from "./normalizationService";
@@ -12,13 +12,26 @@ export interface Transaction extends CanonicalTransaction {
   created_at: string;
 }
 
+// SQLite's "INSERT OR IGNORE" and Postgres's "ON CONFLICT ... DO NOTHING"
+// both achieve the same dedup-on-(account_id, external_id) behavior but
+// use different syntax, so this is the one query in the codebase that
+// genuinely needs an engine branch rather than portable SQL.
+const INSERT_SQL = isPostgres
+  ? `INSERT INTO transactions
+     (id, account_id, business_id, external_id, amount, currency, type, counterparty, category, status, source_provider, raw_status, occurred_at, created_at)
+     VALUES (@id, @account_id, @business_id, @external_id, @amount, @currency, @type, @counterparty, @category, @status, @source_provider, @raw_status, @occurred_at, @created_at)
+     ON CONFLICT (account_id, external_id) DO NOTHING`
+  : `INSERT OR IGNORE INTO transactions
+     (id, account_id, business_id, external_id, amount, currency, type, counterparty, category, status, source_provider, raw_status, occurred_at, created_at)
+     VALUES (@id, @account_id, @business_id, @external_id, @amount, @currency, @type, @counterparty, @category, @status, @source_provider, @raw_status, @occurred_at, @created_at)`;
+
 /**
  * Pulls raw transactions from the account's provider, normalizes them into
  * the canonical schema, and stores new ones (deduped on account+external_id
  * so re-syncing is safe). Fires a transaction.created webhook per new row.
  */
 export async function syncAccountTransactions(accountId: string): Promise<{ synced: number; skipped_duplicates: number; transactions: Transaction[] }> {
-  const account = getAccount(accountId);
+  const account = await getAccount(accountId);
   if (!account) throw new Error("account_not_found");
 
   const raw =
@@ -30,12 +43,6 @@ export async function syncAccountTransactions(accountId: string): Promise<{ sync
   let skipped = 0;
   const inserted: Transaction[] = [];
 
-  const insertStmt = db.prepare(
-    `INSERT OR IGNORE INTO transactions
-     (id, account_id, business_id, external_id, amount, currency, type, counterparty, category, status, source_provider, raw_status, occurred_at, created_at)
-     VALUES (@id, @account_id, @business_id, @external_id, @amount, @currency, @type, @counterparty, @category, @status, @source_provider, @raw_status, @occurred_at, @created_at)`
-  );
-
   for (const canonical of raw) {
     const row = {
       id: uuid(),
@@ -44,7 +51,7 @@ export async function syncAccountTransactions(accountId: string): Promise<{ sync
       created_at: new Date().toISOString(),
       ...canonical,
     };
-    const result = insertStmt.run(row);
+    const result = await dbRun(INSERT_SQL, row);
     if (result.changes > 0) {
       synced++;
       inserted.push(row as Transaction);
@@ -57,8 +64,9 @@ export async function syncAccountTransactions(accountId: string): Promise<{ sync
   return { synced, skipped_duplicates: skipped, transactions: inserted };
 }
 
-export function listTransactionsForBusiness(businessId: string, limit = 100): Transaction[] {
-  return db
-    .prepare(`SELECT * FROM transactions WHERE business_id = ? ORDER BY occurred_at DESC LIMIT ?`)
-    .all(businessId, limit) as Transaction[];
+export async function listTransactionsForBusiness(businessId: string, limit = 100): Promise<Transaction[]> {
+  return dbAll<Transaction>(
+    `SELECT * FROM transactions WHERE business_id = ? ORDER BY occurred_at DESC LIMIT ?`,
+    [businessId, limit]
+  );
 }

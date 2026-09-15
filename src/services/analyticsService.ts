@@ -1,4 +1,4 @@
-import { db } from "../db";
+import { dbAll } from "../db";
 import { Transaction } from "./transactionService";
 
 export interface FinancialProfile {
@@ -22,10 +22,8 @@ export interface FinancialProfile {
  * completed credits, expenses = completed debits. No AI black box here —
  * that belongs in a later AI Service layered on top of this data.
  */
-export function computeFinancialProfile(businessId: string): FinancialProfile {
-  const txns = db
-    .prepare(`SELECT * FROM transactions WHERE business_id = ?`)
-    .all(businessId) as Transaction[];
+export async function computeFinancialProfile(businessId: string): Promise<FinancialProfile> {
+  const txns = await dbAll<Transaction>(`SELECT * FROM transactions WHERE business_id = ?`, [businessId]);
 
   const completed = txns.filter((t) => t.status === "completed");
   const revenue = completed.filter((t) => t.type === "credit").reduce((sum, t) => sum + t.amount, 0);

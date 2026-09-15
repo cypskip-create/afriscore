@@ -1,6 +1,6 @@
 import crypto from "crypto";
 import { v4 as uuid } from "uuid";
-import { db } from "../db";
+import { dbGet, dbAll, dbRun } from "../db";
 
 const GENESIS_HASH = "0".repeat(64);
 
@@ -20,17 +20,16 @@ function hashEntry(prevHash: string, subjectType: string, subjectId: string, eve
   return crypto.createHash("sha256").update(payload).digest("hex");
 }
 
-function getLastEntry(subjectType: string, subjectId: string): LedgerEntry | undefined {
-  return db
-    .prepare(
-      `SELECT * FROM ledger WHERE subject_type = ? AND subject_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1`
-    )
-    .get(subjectType, subjectId) as LedgerEntry | undefined;
+async function getLastEntry(subjectType: string, subjectId: string): Promise<LedgerEntry | undefined> {
+  return dbGet<LedgerEntry>(
+    `SELECT * FROM ledger WHERE subject_type = ? AND subject_id = ? ORDER BY created_at DESC LIMIT 1`,
+    [subjectType, subjectId]
+  );
 }
 
 /** Append a new tamper-evident event to a subject's trust ledger. */
-export function appendEvent(subjectType: "business" | "person", subjectId: string, eventType: string, eventData: object): LedgerEntry {
-  const prev = getLastEntry(subjectType, subjectId);
+export async function appendEvent(subjectType: "business" | "person", subjectId: string, eventType: string, eventData: object): Promise<LedgerEntry> {
+  const prev = await getLastEntry(subjectType, subjectId);
   const prevHash = prev ? prev.entry_hash : GENESIS_HASH;
   const createdAt = new Date().toISOString();
   const dataStr = JSON.stringify(eventData);
@@ -47,23 +46,25 @@ export function appendEvent(subjectType: "business" | "person", subjectId: strin
     created_at: createdAt,
   };
 
-  db.prepare(
+  await dbRun(
     `INSERT INTO ledger (id, subject_type, subject_id, event_type, event_data, prev_hash, entry_hash, created_at)
-     VALUES (@id, @subject_type, @subject_id, @event_type, @event_data, @prev_hash, @entry_hash, @created_at)`
-  ).run(entry);
+     VALUES (@id, @subject_type, @subject_id, @event_type, @event_data, @prev_hash, @entry_hash, @created_at)`,
+    entry
+  );
 
   return entry;
 }
 
-export function getLedger(subjectType: "business" | "person", subjectId: string): LedgerEntry[] {
-  return db
-    .prepare(`SELECT * FROM ledger WHERE subject_type = ? AND subject_id = ? ORDER BY created_at ASC, rowid ASC`)
-    .all(subjectType, subjectId) as LedgerEntry[];
+export async function getLedger(subjectType: "business" | "person", subjectId: string): Promise<LedgerEntry[]> {
+  return dbAll<LedgerEntry>(
+    `SELECT * FROM ledger WHERE subject_type = ? AND subject_id = ? ORDER BY created_at ASC`,
+    [subjectType, subjectId]
+  );
 }
 
 /** Re-walks the chain and confirms no entry has been altered or reordered. */
-export function verifyChainIntegrity(subjectType: "business" | "person", subjectId: string): { valid: boolean; brokenAt?: string; entryCount: number } {
-  const entries = getLedger(subjectType, subjectId);
+export async function verifyChainIntegrity(subjectType: "business" | "person", subjectId: string): Promise<{ valid: boolean; brokenAt?: string; entryCount: number }> {
+  const entries = await getLedger(subjectType, subjectId);
   let expectedPrev = GENESIS_HASH;
 
   for (const entry of entries) {

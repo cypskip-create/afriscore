@@ -12,26 +12,26 @@ const grantSchema = z.object({
   scope: z.array(z.string()).min(1),
 });
 
-router.post("/", (req, res) => {
+router.post("/", async (req, res) => {
   const parsed = grantSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: "invalid_input", details: parsed.error.flatten() });
 
-  const consent = grantConsent(parsed.data);
+  const consent = await grantConsent(parsed.data);
   res.status(201).json(consent);
 });
 
-router.delete("/:id", (req, res) => {
-  const consent = revokeConsent(req.params.id);
+router.delete("/:id", async (req, res) => {
+  const consent = await revokeConsent(req.params.id);
   if (!consent) return res.status(404).json({ error: "not_found" });
   res.json(consent);
 });
 
-router.get("/", (req, res) => {
+router.get("/", async (req, res) => {
   const { subject_type, subject_id } = req.query;
   if (!subject_type || !subject_id) {
     return res.status(400).json({ error: "missing_params", detail: "subject_type and subject_id are required" });
   }
-  res.json(listConsents(String(subject_type), String(subject_id)));
+  res.json(await listConsents(String(subject_type), String(subject_id)));
 });
 
 export default router;

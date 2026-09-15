@@ -1,5 +1,5 @@
 import { v4 as uuid } from "uuid";
-import { db } from "../db";
+import { dbGet, dbAll, dbRun } from "../db";
 import { getBusiness } from "./businessService";
 import { appendEvent } from "./ledgerService";
 
@@ -11,19 +11,19 @@ export interface Invoice {
   currency: string;
   issue_date: string;
   due_date?: string;
-  status: string; // unpaid | paid | overdue
+  status: string;
   matched_transaction_id?: string;
   created_at: string;
   paid_at?: string;
 }
 
-export function createInvoice(input: {
+export async function createInvoice(input: {
   business_id: string;
   customer_reference: string;
   amount: number;
   due_date?: string;
-}): Invoice {
-  const business = getBusiness(input.business_id);
+}): Promise<Invoice> {
+  const business = await getBusiness(input.business_id);
   if (!business) throw new Error("business_not_found");
 
   const now = new Date().toISOString();
@@ -39,12 +39,13 @@ export function createInvoice(input: {
     created_at: now,
   };
 
-  db.prepare(
+  await dbRun(
     `INSERT INTO invoices (id, business_id, customer_reference, amount, currency, issue_date, due_date, status, created_at)
-     VALUES (@id, @business_id, @customer_reference, @amount, @currency, @issue_date, @due_date, @status, @created_at)`
-  ).run(invoice);
+     VALUES (@id, @business_id, @customer_reference, @amount, @currency, @issue_date, @due_date, @status, @created_at)`,
+    invoice
+  );
 
-  appendEvent("business", input.business_id, "invoice.created", {
+  await appendEvent("business", input.business_id, "invoice.created", {
     invoice_id: invoice.id,
     amount: invoice.amount,
     customer_reference: invoice.customer_reference,
@@ -53,25 +54,26 @@ export function createInvoice(input: {
   return invoice;
 }
 
-export function getInvoice(id: string): Invoice | undefined {
-  return db.prepare(`SELECT * FROM invoices WHERE id = ?`).get(id) as Invoice | undefined;
+export async function getInvoice(id: string): Promise<Invoice | undefined> {
+  return dbGet<Invoice>(`SELECT * FROM invoices WHERE id = ?`, [id]);
 }
 
-export function listInvoicesForBusiness(businessId: string, status?: string): Invoice[] {
+export async function listInvoicesForBusiness(businessId: string, status?: string): Promise<Invoice[]> {
   if (status) {
-    return db
-      .prepare(`SELECT * FROM invoices WHERE business_id = ? AND status = ? ORDER BY issue_date DESC`)
-      .all(businessId, status) as Invoice[];
+    return dbAll<Invoice>(
+      `SELECT * FROM invoices WHERE business_id = ? AND status = ? ORDER BY issue_date DESC`,
+      [businessId, status]
+    );
   }
-  return db.prepare(`SELECT * FROM invoices WHERE business_id = ? ORDER BY issue_date DESC`).all(businessId) as Invoice[];
+  return dbAll<Invoice>(`SELECT * FROM invoices WHERE business_id = ? ORDER BY issue_date DESC`, [businessId]);
 }
 
-export function markInvoicePaid(invoiceId: string, transactionId: string): Invoice {
+export async function markInvoicePaid(invoiceId: string, transactionId: string): Promise<Invoice> {
   const now = new Date().toISOString();
-  db.prepare(`UPDATE invoices SET status = 'paid', matched_transaction_id = ?, paid_at = ? WHERE id = ?`).run(
+  await dbRun(`UPDATE invoices SET status = 'paid', matched_transaction_id = ?, paid_at = ? WHERE id = ?`, [
     transactionId,
     now,
-    invoiceId
-  );
-  return getInvoice(invoiceId)!;
+    invoiceId,
+  ]);
+  return (await getInvoice(invoiceId))!;
 }

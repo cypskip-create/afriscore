@@ -1,5 +1,5 @@
 import { v4 as uuid } from "uuid";
-import { db } from "../db";
+import { dbGet, dbAll, dbRun } from "../db";
 import { getBusiness } from "./businessService";
 import { appendEvent } from "./ledgerService";
 import { emitEvent } from "./webhookService";
@@ -15,7 +15,7 @@ export interface Account {
 }
 
 export async function connectAccount(businessId: string, provider: "mpesa" | "bank", accountIdentifier: string): Promise<Account> {
-  const business = getBusiness(businessId);
+  const business = await getBusiness(businessId);
   if (!business) throw new Error("business_not_found");
 
   const account: Account = {
@@ -27,23 +27,22 @@ export async function connectAccount(businessId: string, provider: "mpesa" | "ba
     connected_at: new Date().toISOString(),
   };
 
-  db.prepare(
+  await dbRun(
     `INSERT INTO accounts (id, business_id, provider, account_identifier, status, connected_at)
-     VALUES (@id, @business_id, @provider, @account_identifier, @status, @connected_at)`
-  ).run(account);
+     VALUES (@id, @business_id, @provider, @account_identifier, @status, @connected_at)`,
+    account
+  );
 
-  // Every account connection is also a trust-ledger event — a lender viewing
-  // this business's trust record can see which data sources feed its profile.
-  appendEvent("business", businessId, "account.connected", { account_id: account.id, provider });
+  await appendEvent("business", businessId, "account.connected", { account_id: account.id, provider });
   await emitEvent("account.connected", { account_id: account.id, business_id: businessId, provider });
 
   return account;
 }
 
-export function getAccount(id: string): Account | undefined {
-  return db.prepare(`SELECT * FROM accounts WHERE id = ?`).get(id) as Account | undefined;
+export async function getAccount(id: string): Promise<Account | undefined> {
+  return dbGet<Account>(`SELECT * FROM accounts WHERE id = ?`, [id]);
 }
 
-export function listAccountsForBusiness(businessId: string): Account[] {
-  return db.prepare(`SELECT * FROM accounts WHERE business_id = ? ORDER BY connected_at DESC`).all(businessId) as Account[];
+export async function listAccountsForBusiness(businessId: string): Promise<Account[]> {
+  return dbAll<Account>(`SELECT * FROM accounts WHERE business_id = ? ORDER BY connected_at DESC`, [businessId]);
 }

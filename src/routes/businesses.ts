@@ -15,23 +15,23 @@ const createSchema = z.object({
   industry: z.string().optional(),
 });
 
-router.post("/", (req, res) => {
+router.post("/", async (req, res) => {
   const parsed = createSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: "invalid_input", details: parsed.error.flatten() });
 
-  const business = createBusiness(parsed.data);
+  const business = await createBusiness(parsed.data);
   res.status(201).json(business);
 });
 
-router.get("/:id", (req, res) => {
-  const business = getBusiness(req.params.id);
+router.get("/:id", async (req, res) => {
+  const business = await getBusiness(req.params.id);
   if (!business) return res.status(404).json({ error: "not_found" });
   res.json(business);
 });
 
-router.post("/:id/verify", (req, res) => {
+router.post("/:id/verify", async (req, res) => {
   try {
-    const result = runVerificationChecks(req.params.id);
+    const result = await runVerificationChecks(req.params.id);
     res.json(result);
   } catch (e: any) {
     if (e.message === "business_not_found") return res.status(404).json({ error: "not_found" });
@@ -39,24 +39,18 @@ router.post("/:id/verify", (req, res) => {
   }
 });
 
-// Trust record — this is the endpoint a partner platform (lender, marketplace,
-// delivery app) actually calls. Gated by consent: the calling client (proven by
-// its API key, not a self-declared header) must have an active consent grant.
-router.get("/:id/trust-record", requireApiKey, (req: AuthedRequest, res) => {
-  if (!isConsentActive("business", req.params.id, req.client!.name)) {
+router.get("/:id/trust-record", requireApiKey, async (req: AuthedRequest, res) => {
+  if (!(await isConsentActive("business", req.params.id, req.client!.name))) {
     return res.status(403).json({ error: "consent_required", detail: "No active consent for this grantee" });
   }
 
-  const record = getTrustRecord(req.params.id);
+  const record = await getTrustRecord(req.params.id);
   if (!record) return res.status(404).json({ error: "not_found" });
   res.json(record);
 });
 
-// Public integrity proof — deliberately unauthenticated. Doesn't leak business
-// data, just confirms the hash chain hasn't been tampered with. Useful as a
-// standalone trust demo for a partner evaluating the platform.
-router.get("/:id/ledger/verify", (req, res) => {
-  const result = verifyChainIntegrity("business", req.params.id);
+router.get("/:id/ledger/verify", async (req, res) => {
+  const result = await verifyChainIntegrity("business", req.params.id);
   res.json(result);
 });
 

@@ -4,13 +4,15 @@ The identity & trust wedge for AfriCore. Verifies a business, builds a
 tamper-evident trust ledger, computes an explainable trust score, and
 gates access to that record behind explicit consent.
 
-# AfriCore — Phase 1 + Between-Phases + Phase 2 + Phase 3
+# AfriCore — Phase 1 through 5
 
 Phase 1 built the identity & trust wedge. Between-phases hardened it
-with real API-key auth. Phase 2 added the Data Infrastructure layer —
-connectors, normalization, transactions, financial profile. This adds
-Phase 3: **Business Operations** (invoices + the reconciliation
-engine) plus gateway hardening (rate limiting, signed webhooks).
+with real API-key auth. Phase 2 added Data Infrastructure. Phase 3
+added Business Operations (invoices + reconciliation) plus gateway
+hardening. Phase 4 added Business Intelligence. This adds Phase 5:
+a natural-language **query layer** over the Insights Service, and a
+genuine **PostgreSQL migration** — tested end to end against a real
+Postgres instance, not just documented.
 
 ## What's built
 
@@ -76,15 +78,62 @@ engine) plus gateway hardening (rate limiting, signed webhooks).
   re-exposed). Every delivery includes an `x-africore-signature` header
   so a partner can verify the webhook actually came from AfriCore.
 
-## Not built yet (Phase 4+)
+### Phase 4 — Business Intelligence
+- **Insights Service** (`insightsService.ts`) — four deterministic,
+  auditable analyses built on real transaction/invoice data, no AI
+  involved (per the spec's own principle: use structured data, not
+  generic AI guesses):
+  - `getOverdueInvoices` — unpaid invoices past their due date, sorted
+    by days overdue
+  - `getCashFlowForecast` — linear projection from transaction
+    history, with an honest `confidence` rating (low/medium/high)
+    based on how much history it's actually built on
+  - `getUnusualTransactions` — statistical outliers (>2 standard
+    deviations from the business's own mean transaction size), needs
+    5+ transactions to compute
+  - `getCustomerConcentration` — revenue share by customer, computed
+    over paid invoices only
+  - This is the data layer an AI/NLP agent (spec section 20/21) would
+    eventually query — deliberately kept separate so the *answers*
+    stay grounded in code, not model guesswork, even after a real LLM
+    is wired in on top.
 
-Real KRA/M-Pesa/bank institutional integrations (still simulated),
-Payroll/Inventory primitives, Risk/Analytics beyond the basic financial
-profile, AI Service, Billing, PostgreSQL migration (still SQLite — swap
-`better-sqlite3` for `pg` in `db/index.ts` when ready; the schema was
-written to be portable), full sandbox namespace with simulated failure
-scenarios, fuzzy/partial-payment reconciliation matching, Redis-backed
-rate limiting for multi-instance deployments.
+### Phase 5 — Query Layer + PostgreSQL
+- **Query Service** (`queryService.ts`) — `POST /v1/businesses/:id/ask
+  {"question": "..."}`. Rule-based keyword-intent matching routes plain-
+  language questions to the right Insights Service function. Not a real
+  LLM (no API key available to wire one in, and the spec is explicit
+  that answers should come from structured data, not model guesswork)
+  — every answer is 100% grounded in real data, zero hallucination
+  risk, narrower phrasing coverage than a real NLU. Swap
+  `matchIntent()` for an LLM call later without touching the data
+  layer underneath.
+- **Dual-engine DB adapter** (`db/adapter.ts`) — every service calls
+  `dbGet`/`dbAll`/`dbRun`/`dbExec` instead of touching a driver
+  directly. No `DATABASE_URL` set → SQLite (local dev). `DATABASE_URL`
+  set → PostgreSQL, genuinely async via `pg`. Same SQL strings work
+  against both engines (the adapter translates `?`/`@name` placeholders
+  to Postgres's `$1, $2, ...` transparently) — the one exception is the
+  dedup insert in `transactionService.ts`, which needs `INSERT OR
+  IGNORE` (SQLite) vs `ON CONFLICT DO NOTHING` (Postgres) since that
+  syntax genuinely differs between engines.
+- **This was tested against a real, running Postgres instance** — not
+  just written and assumed to work. Full flow (business creation,
+  verification, duplicate-ID detection, account connection, M-Pesa +
+  bank sync and normalization, reconciliation, insights, the ask
+  layer, ledger integrity, and re-sync deduplication via `ON CONFLICT`)
+  ran clean on both SQLite and Postgres with identical results.
+
+## Not built yet (Phase 6+)
+
+Real KRA/M-Pesa/bank institutional integrations (still simulated —
+needs partnerships, not code), Payroll/Inventory primitives, a real
+LLM wired into the query layer for broader natural-language coverage,
+Billing, full sandbox namespace with simulated failure scenarios,
+fuzzy/partial-payment reconciliation matching, Redis-backed rate
+limiting for multi-instance deployments, a proper migration framework
+(the current guard in `db/index.ts` is fine for two extra columns but
+won't scale past a handful of schema changes).
 
 ## Run it
 
@@ -92,7 +141,9 @@ rate limiting for multi-instance deployments.
 npm install
 npm run build
 npm start
-# server on :4000, SQLite file at ./africore.db
+# server on :4000
+# No DATABASE_URL set -> SQLite file at ./africore.db
+# DATABASE_URL set     -> PostgreSQL (tested against a real instance)
 ```
 
 ## API — everything under `/v1`
@@ -130,10 +181,23 @@ npm start
 - `GET /v1/businesses/:id/invoices?status=unpaid` — list, optionally filtered
 - `POST /v1/businesses/:id/reconcile` — run matching, returns `{matched, unmatched_invoices}`
 
+### Business Intelligence
+- `GET /v1/businesses/:id/insights` 🔒 + consent — bundles all four:
+  `overdue_invoices`, `cash_flow_forecast`, `unusual_transactions`,
+  `customer_concentration`
+
+### Query Layer
+- `POST /v1/businesses/:id/ask` 🔒 + consent — `{question: "which invoices are overdue?"}`
+  → `{question, matched_intent, answer, data}`. Recognized intents:
+  overdue invoices, cash flow forecast, unusual transactions, customer
+  concentration, financial profile, trust score. Unmatched questions
+  get an honest "couldn't match that" response, never a guess.
+
 ## Next build steps
 
-1. Swap simulated connectors for real KRA / M-Pesa Daraja / bank open-banking calls
-2. PostgreSQL migration for production deployment
+1. Swap simulated connectors for real KRA / M-Pesa Daraja / bank open-banking calls (needs institutional partnerships first)
+2. Wire a real LLM into the query layer for broader natural-language coverage (swap `matchIntent()` in `queryService.ts` — the data layer underneath doesn't need to change)
 3. Fuzzy/partial-payment reconciliation matching (amount tolerance, counterparty matching, split payments)
 4. A proper sandbox namespace with simulate-failure scenarios, separate from live data
 5. Redis-backed rate limiting once running more than one instance
+6. A real migration framework once schema changes outgrow the current PRAGMA-guard approach
