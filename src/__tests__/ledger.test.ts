@@ -1,31 +1,21 @@
 import { test, describe, before, after } from "node:test";
 import assert from "node:assert";
-import fs from "fs";
-import path from "path";
+import { configureTestEnv, truncateAll, removeSqliteFile } from "./helpers";
 
-// Point at a throwaway DB before any module loads the adapter.
-const TEST_DB = path.join(__dirname, "../../test-ledger.db");
-process.env.DB_PATH = TEST_DB;
-delete process.env.DATABASE_URL; // force SQLite for this suite
+// Must run before any module that loads the DB adapter.
+const { sqlitePath } = configureTestEnv("ledger");
 
-import { migrate } from "../db";
-import { rawSqliteDb } from "../db/adapter";
+import { migrate, dbRun } from "../db";
 import { appendEvent, getLedger, verifyChainIntegrity } from "../services/ledgerService";
-
-function cleanup() {
-  for (const suffix of ["", "-shm", "-wal"]) {
-    const p = TEST_DB + suffix;
-    if (fs.existsSync(p)) fs.unlinkSync(p);
-  }
-}
 
 describe("hash-chained ledger", () => {
   before(async () => {
     await migrate();
+    await truncateAll(dbRun);
   });
 
   after(() => {
-    cleanup();
+    removeSqliteFile(sqlitePath);
   });
 
   test("first entry chains from the genesis hash", async () => {
@@ -74,9 +64,10 @@ describe("hash-chained ledger", () => {
     // score after the fact — exactly the scenario the ledger exists to catch.
     const entries = await getLedger("business", "biz-tamper");
     const target = entries.find((e) => e.event_type === "score.updated")!;
-    rawSqliteDb!
-      .prepare(`UPDATE ledger SET event_data = ? WHERE id = ?`)
-      .run(JSON.stringify({ trust_score: 99 }), target.id);
+    await dbRun(`UPDATE ledger SET event_data = ? WHERE id = ?`, [
+      JSON.stringify({ trust_score: 99 }),
+      target.id,
+    ]);
 
     const after = await verifyChainIntegrity("business", "biz-tamper");
     assert.strictEqual(after.valid, false, "tampered chain must NOT verify");
@@ -90,7 +81,7 @@ describe("hash-chained ledger", () => {
 
     const entries = await getLedger("business", "biz-del");
     const middle = entries[1];
-    rawSqliteDb!.prepare(`DELETE FROM ledger WHERE id = ?`).run(middle.id);
+    await dbRun(`DELETE FROM ledger WHERE id = ?`, [middle.id]);
 
     const result = await verifyChainIntegrity("business", "biz-del");
     assert.strictEqual(result.valid, false, "chain with a removed entry must NOT verify");

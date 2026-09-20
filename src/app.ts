@@ -6,6 +6,7 @@ import personRoutes from "./routes/persons";
 import clientRoutes from "./routes/clients";
 import businessDataRoutes from "./routes/businessData";
 import webhookRoutes from "./routes/webhooks";
+import sandboxRoutes from "./routes/sandbox";
 import { rateLimit } from "./middleware/rateLimit";
 
 /**
@@ -28,7 +29,7 @@ export function createApp() {
   });
 
   app.get("/v1/health", (_req, res) =>
-    res.json({ status: "ok", service: "africore", phase: 7, db_engine: isPostgres ? "postgres" : "sqlite" })
+    res.json({ status: "ok", service: "africore", phase: 9, db_engine: isPostgres ? "postgres" : "sqlite" })
   );
 
   app.use("/v1/businesses", businessRoutes);
@@ -37,6 +38,7 @@ export function createApp() {
   app.use("/v1/consents", consentRoutes);
   app.use("/v1/clients", clientRoutes);
   app.use("/v1/webhooks", webhookRoutes);
+  app.use("/v1/sandbox", sandboxRoutes);
 
   app.use((req, res) => res.status(404).json({ error: "not_found", path: req.originalUrl }));
 

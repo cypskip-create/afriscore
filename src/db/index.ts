@@ -15,6 +15,7 @@ const SCHEMA = `
     industry TEXT,
     status TEXT DEFAULT 'pending_verification',
     trust_score REAL DEFAULT 0,
+    is_sandbox INTEGER DEFAULT 0,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
   );
@@ -25,6 +26,7 @@ const SCHEMA = `
     national_id_hash TEXT,
     phone_hash TEXT,
     status TEXT DEFAULT 'pending_verification',
+    is_sandbox INTEGER DEFAULT 0,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
   );
@@ -69,6 +71,7 @@ const SCHEMA = `
     provider TEXT NOT NULL,
     account_identifier TEXT NOT NULL,
     status TEXT DEFAULT 'connected',
+    scenario TEXT,
     connected_at TEXT NOT NULL,
     disconnected_at TEXT
   );
@@ -125,6 +128,7 @@ const SCHEMA = `
     due_date TEXT,
     status TEXT DEFAULT 'unpaid',
     matched_transaction_id TEXT,
+    expected_counterparty TEXT,
     created_at TEXT NOT NULL,
     paid_at TEXT
   );
@@ -138,16 +142,23 @@ export async function migrate(): Promise<void> {
   if (isPostgres) {
     await dbExec(`ALTER TABLE transactions ADD COLUMN IF NOT EXISTS matched_invoice_id TEXT;`);
     await dbExec(`ALTER TABLE webhook_subscriptions ADD COLUMN IF NOT EXISTS secret TEXT;`);
+    await dbExec(`ALTER TABLE businesses ADD COLUMN IF NOT EXISTS is_sandbox INTEGER DEFAULT 0;`);
+    await dbExec(`ALTER TABLE persons ADD COLUMN IF NOT EXISTS is_sandbox INTEGER DEFAULT 0;`);
+    await dbExec(`ALTER TABLE accounts ADD COLUMN IF NOT EXISTS scenario TEXT;`);
+    await dbExec(`ALTER TABLE invoices ADD COLUMN IF NOT EXISTS expected_counterparty TEXT;`);
   } else {
-    const transactionCols = rawSqliteDb!.prepare(`PRAGMA table_info(transactions)`).all() as { name: string }[];
-    if (!transactionCols.some((c) => c.name === "matched_invoice_id")) {
-      rawSqliteDb!.exec(`ALTER TABLE transactions ADD COLUMN matched_invoice_id TEXT`);
-    }
-
-    const webhookSubCols = rawSqliteDb!.prepare(`PRAGMA table_info(webhook_subscriptions)`).all() as { name: string }[];
-    if (!webhookSubCols.some((c) => c.name === "secret")) {
-      rawSqliteDb!.exec(`ALTER TABLE webhook_subscriptions ADD COLUMN secret TEXT`);
-    }
+    const guard = (table: string, column: string, ddl: string) => {
+      const cols = rawSqliteDb!.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
+      if (!cols.some((c) => c.name === column)) {
+        rawSqliteDb!.exec(`ALTER TABLE ${table} ADD COLUMN ${ddl}`);
+      }
+    };
+    guard("transactions", "matched_invoice_id", "matched_invoice_id TEXT");
+    guard("webhook_subscriptions", "secret", "secret TEXT");
+    guard("businesses", "is_sandbox", "is_sandbox INTEGER DEFAULT 0");
+    guard("persons", "is_sandbox", "is_sandbox INTEGER DEFAULT 0");
+    guard("accounts", "scenario", "scenario TEXT");
+    guard("invoices", "expected_counterparty", "expected_counterparty TEXT");
   }
 }
 

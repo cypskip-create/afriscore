@@ -1,15 +1,12 @@
 import { test, describe, before, after } from "node:test";
 import assert from "node:assert";
-import fs from "fs";
-import path from "path";
 import type { Server } from "http";
+import { configureTestEnv, truncateAll, removeSqliteFile } from "./helpers";
 
-// Throwaway DB, set before any module loads the adapter.
-const TEST_DB = path.join(__dirname, "../../test-api.db");
-process.env.DB_PATH = TEST_DB;
-delete process.env.DATABASE_URL;
+// Must run before any module that loads the DB adapter.
+const { isPg, sqlitePath } = configureTestEnv("api");
 
-import { migrate } from "../db";
+import { migrate, dbRun } from "../db";
 import { createApp } from "../app";
 
 let server: Server;
@@ -37,19 +34,12 @@ async function api(method: string, urlPath: string, opts: { body?: unknown; apiK
   return { status: res.status, body: json };
 }
 
-function cleanup() {
-  for (const suffix of ["", "-shm", "-wal"]) {
-    const p = TEST_DB + suffix;
-    if (fs.existsSync(p)) fs.unlinkSync(p);
-  }
-}
-
 describe("API routes", () => {
   before(async () => {
-    // No cleanup() here: the adapter opened a handle to TEST_DB at import
-    // time, so deleting the file now invalidates that handle
-    // (SQLITE_IOERR_FSTAT). Stale files are removed before the run instead.
+    // Truncate rather than delete the file: the adapter opened a handle at
+    // import time, and removing it mid-run causes SQLITE_IOERR_FSTAT.
     await migrate();
+    await truncateAll(dbRun);
     console.log = () => {};
     const app = createApp();
     await new Promise<void>((resolve) => {
@@ -63,14 +53,14 @@ describe("API routes", () => {
   after(async () => {
     console.log = originalLog;
     await new Promise<void>((resolve) => server.close(() => resolve()));
-    cleanup();
+    removeSqliteFile(sqlitePath);
   });
 
   test("health endpoint reports engine", async () => {
     const res = await api("GET", "/v1/health");
     assert.strictEqual(res.status, 200);
     assert.strictEqual(res.body.status, "ok");
-    assert.strictEqual(res.body.db_engine, "sqlite");
+    assert.strictEqual(res.body.db_engine, isPg ? "postgres" : "sqlite");
   });
 
   test("unknown route returns a structured 404", async () => {

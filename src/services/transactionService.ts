@@ -1,8 +1,8 @@
 import { v4 as uuid } from "uuid";
 import { dbAll, dbRun, isPostgres } from "../db";
 import { getAccount } from "./accountService";
-import { fetchMpesaTransactions, fetchBankTransactions } from "./connectorService";
-import { normalizeMpesaTransaction, normalizeBankTransaction, CanonicalTransaction } from "./normalizationService";
+import { fetchMpesaTransactions, fetchBankTransactions, fetchSandboxTransactions, SandboxScenario } from "./connectorService";
+import { normalizeMpesaTransaction, normalizeBankTransaction, normalizeSandboxTransaction, CanonicalTransaction } from "./normalizationService";
 import { emitEvent } from "./webhookService";
 
 export interface Transaction extends CanonicalTransaction {
@@ -33,11 +33,16 @@ const INSERT_SQL = isPostgres
 export async function syncAccountTransactions(accountId: string): Promise<{ synced: number; skipped_duplicates: number; transactions: Transaction[] }> {
   const account = await getAccount(accountId);
   if (!account) throw new Error("account_not_found");
+  if (account.status === "disconnected") throw new Error("account_disconnected");
 
   const raw =
     account.provider === "mpesa"
       ? fetchMpesaTransactions(account.account_identifier).map(normalizeMpesaTransaction)
-      : fetchBankTransactions(account.account_identifier).map(normalizeBankTransaction);
+      : account.provider === "bank"
+      ? fetchBankTransactions(account.account_identifier).map(normalizeBankTransaction)
+      : fetchSandboxTransactions(account.account_identifier, (account.scenario as SandboxScenario) || "mixed").map(
+          normalizeSandboxTransaction
+        );
 
   let synced = 0;
   let skipped = 0;

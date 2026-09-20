@@ -1,4 +1,4 @@
-import { RawMpesaTransaction, RawBankTransaction } from "./connectorService";
+import { RawMpesaTransaction, RawBankTransaction, SandboxTransaction } from "./connectorService";
 
 export interface CanonicalTransaction {
   external_id: string;
@@ -32,7 +32,23 @@ export function normalizeMpesaTransaction(raw: RawMpesaTransaction): CanonicalTr
   };
 }
 
-/** Bank's CREDIT/DEBIT + COMPLETED/PENDING/REVERSED vocabulary -> canonical. */
+/** Sandbox transactions are already close to canonical shape — this
+ *  mostly just tags the source and fills in the fields real providers
+ *  would carry (currency, category) with sandbox defaults. */
+export function normalizeSandboxTransaction(raw: SandboxTransaction): CanonicalTransaction {
+  return {
+    external_id: raw.external_id,
+    amount: raw.amount,
+    currency: "KES",
+    type: raw.type,
+    counterparty: null,
+    category: raw.type === "credit" ? "sales" : "expenses",
+    status: raw.status,
+    source_provider: "sandbox",
+    raw_status: raw.status,
+    occurred_at: raw.occurred_at,
+  };
+}
 export function normalizeBankTransaction(raw: RawBankTransaction): CanonicalTransaction {
   const type: "credit" | "debit" = raw.debitCredit === "CREDIT" ? "credit" : "debit";
   const status: CanonicalTransaction["status"] =

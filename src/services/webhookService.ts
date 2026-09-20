@@ -52,6 +52,29 @@ function sign(secret: string, body: string): string {
 }
 
 /**
+ * Fires a single synthetic, signed delivery at an arbitrary URL — lets a
+ * developer verify their receiver handles the signature correctly
+ * without needing a real business event to exist first (spec section
+ * 33: "simulate webhook failures" as a sandbox capability).
+ */
+export async function testWebhookDelivery(targetUrl: string): Promise<{ delivered: boolean; status_code?: number; error?: string; signature: string }> {
+  const secret = `whsec_test_${crypto.randomBytes(12).toString("hex")}`;
+  const body = JSON.stringify({ event: "webhook.test", data: { message: "This is a test delivery from AfriCore's sandbox." }, id: uuid() });
+  const signature = sign(secret, body);
+
+  try {
+    const res = await fetch(targetUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-africore-signature": signature },
+      body,
+    });
+    return { delivered: res.ok, status_code: res.status, signature };
+  } catch (err: any) {
+    return { delivered: false, error: err?.message || "delivery_failed", signature };
+  }
+}
+
+/**
  * Records the event (always, for audit/debugging via GET /v1/webhook-events)
  * and attempts best-effort, signed delivery to any matching active
  * subscription. Delivery failures never throw — webhook delivery must not

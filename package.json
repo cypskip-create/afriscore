@@ -9,10 +9,11 @@
     "start": "node dist/index.js",
     "dev": "ts-node src/index.ts",
     "test": "npm run build && node --test --test-concurrency=1 \"dist/__tests__/*.test.js\"",
-    "pretest": "rm -f test-*.db test-*.db-shm test-*.db-wal"
+    "pretest": "rm -f test-*.db test-*.db-shm test-*.db-wal",
+    "test:pg": "npm run build && node --test --test-concurrency=1 \"dist/__tests__/*.test.js\""
   },
   "dependencies": {
-    "better-sqlite3": "^11.3.0",
+    "better-sqlite3": "^13.0.3",
     "express": "^4.19.2",
     "pg": "^8.23.0",
     "uuid": "^9.0.1",

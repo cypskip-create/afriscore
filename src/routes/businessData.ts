@@ -1,6 +1,6 @@
 import { Router, Request } from "express";
 import { z } from "zod";
-import { connectAccount, listAccountsForBusiness } from "../services/accountService";
+import { connectAccount, disconnectAccount, listAccountsForBusiness } from "../services/accountService";
 import { syncAccountTransactions, listTransactionsForBusiness } from "../services/transactionService";
 import { computeFinancialProfile } from "../services/analyticsService";
 import { isConsentActive } from "../services/consentService";
@@ -16,8 +16,9 @@ type BizRequest = Request<BizParams>;
 const router = Router({ mergeParams: true });
 
 const connectSchema = z.object({
-  provider: z.enum(["mpesa", "bank"]),
+  provider: z.enum(["mpesa", "bank", "sandbox"]),
   account_identifier: z.string().min(3),
+  scenario: z.enum(["success", "failure", "duplicate", "mixed"]).optional(),
 });
 
 router.post("/accounts/connect", async (req: BizRequest, res) => {
@@ -25,10 +26,20 @@ router.post("/accounts/connect", async (req: BizRequest, res) => {
   if (!parsed.success) return res.status(400).json({ error: "invalid_input", details: parsed.error.flatten() });
 
   try {
-    const account = await connectAccount(req.params.id, parsed.data.provider, parsed.data.account_identifier);
+    const account = await connectAccount(req.params.id, parsed.data.provider, parsed.data.account_identifier, parsed.data.scenario);
     res.status(201).json(account);
   } catch (e: any) {
     if (e.message === "business_not_found") return res.status(404).json({ error: "not_found" });
+    throw e;
+  }
+});
+
+router.post("/accounts/:accountId/disconnect", async (req: BizRequest, res) => {
+  try {
+    const account = await disconnectAccount(req.params.accountId);
+    res.json(account);
+  } catch (e: any) {
+    if (e.message === "account_not_found") return res.status(404).json({ error: "not_found" });
     throw e;
   }
 });
@@ -43,6 +54,7 @@ router.post("/accounts/:accountId/sync", async (req: BizRequest, res) => {
     res.json(result);
   } catch (e: any) {
     if (e.message === "account_not_found") return res.status(404).json({ error: "not_found" });
+    if (e.message === "account_disconnected") return res.status(409).json({ error: "account_disconnected", detail: "Reconnect the account before syncing" });
     throw e;
   }
 });
@@ -64,6 +76,7 @@ const invoiceSchema = z.object({
   customer_reference: z.string().min(1),
   amount: z.number().positive(),
   due_date: z.string().optional(),
+  expected_counterparty: z.string().optional(),
 });
 
 router.post("/invoices", async (req: BizRequest, res) => {

@@ -1,5 +1,5 @@
 import { v4 as uuid } from "uuid";
-import { dbGet, dbRun } from "../db";
+import { dbGet, dbAll, dbRun } from "../db";
 import { appendEvent, getLedger, verifyChainIntegrity } from "./ledgerService";
 import { computeTrustScore } from "./scoreService";
 
@@ -13,6 +13,7 @@ export interface Business {
   industry?: string;
   status: string;
   trust_score: number;
+  is_sandbox: boolean;
   created_at: string;
   updated_at: string;
 }
@@ -23,9 +24,10 @@ export async function createBusiness(input: {
   registration_number?: string;
   kra_pin?: string;
   industry?: string;
+  is_sandbox?: boolean;
 }): Promise<Business> {
   const now = new Date().toISOString();
-  const business: Business = {
+  const business = {
     id: uuid(),
     legal_name: input.legal_name,
     trading_name: input.trading_name,
@@ -35,26 +37,30 @@ export async function createBusiness(input: {
     industry: input.industry,
     status: "pending_verification",
     trust_score: 0,
+    is_sandbox: input.is_sandbox ? 1 : 0,
     created_at: now,
     updated_at: now,
   };
 
   await dbRun(
-    `INSERT INTO businesses (id, legal_name, trading_name, registration_number, kra_pin, jurisdiction, industry, status, trust_score, created_at, updated_at)
-     VALUES (@id, @legal_name, @trading_name, @registration_number, @kra_pin, @jurisdiction, @industry, @status, @trust_score, @created_at, @updated_at)`,
+    `INSERT INTO businesses (id, legal_name, trading_name, registration_number, kra_pin, jurisdiction, industry, status, trust_score, is_sandbox, created_at, updated_at)
+     VALUES (@id, @legal_name, @trading_name, @registration_number, @kra_pin, @jurisdiction, @industry, @status, @trust_score, @is_sandbox, @created_at, @updated_at)`,
     business
   );
 
   await appendEvent("business", business.id, "business.created", {
     legal_name: business.legal_name,
     registration_number: business.registration_number,
+    is_sandbox: !!business.is_sandbox,
   });
 
-  return business;
+  return { ...business, is_sandbox: !!business.is_sandbox };
 }
 
 export async function getBusiness(id: string): Promise<Business | undefined> {
-  return dbGet<Business>(`SELECT * FROM businesses WHERE id = ?`, [id]);
+  const row = await dbGet<any>(`SELECT * FROM businesses WHERE id = ?`, [id]);
+  if (!row) return undefined;
+  return { ...row, is_sandbox: !!row.is_sandbox };
 }
 
 /**
@@ -96,6 +102,11 @@ export async function runVerificationChecks(businessId: string): Promise<{ check
   await appendEvent("business", businessId, "score.updated", { trust_score: score });
 
   return { checks, business: (await getBusiness(businessId))! };
+}
+
+export async function listSandboxBusinesses(): Promise<Business[]> {
+  const rows = await dbAll<any>(`SELECT * FROM businesses WHERE is_sandbox = ? ORDER BY created_at DESC`, [1]);
+  return rows.map((r) => ({ ...r, is_sandbox: !!r.is_sandbox }));
 }
 
 export async function getTrustRecord(businessId: string) {

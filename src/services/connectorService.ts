@@ -76,3 +76,55 @@ export function fetchBankTransactions(accountIdentifier: string, count = 5): Raw
   }
   return out;
 }
+
+export type SandboxScenario = "success" | "failure" | "duplicate" | "mixed";
+
+export interface SandboxTransaction {
+  external_id: string;
+  amount: number;
+  type: "credit" | "debit";
+  status: "completed" | "failed" | "pending";
+  occurred_at: string;
+}
+
+/**
+ * Sandbox connector (spec section 33): deterministic, developer-chosen
+ * outcomes instead of the pseudo-random mix the mpesa/bank connectors
+ * produce. A developer picks the scenario when connecting a sandbox
+ * account, so they can reliably test how their integration handles
+ * each case rather than waiting for a random seed to happen to produce it.
+ *
+ *   success   — every transaction completes normally
+ *   failure   — every transaction fails, to test failure handling
+ *   duplicate — the exact same external_id every sync, to test that
+ *               re-syncing doesn't double-count (the real dedup logic
+ *               runs on this exactly as it would on live data)
+ *   mixed     — same behavior as the live mpesa/bank connectors, for
+ *               developers who want realistic variety in sandbox
+ */
+export function fetchSandboxTransactions(accountIdentifier: string, scenario: SandboxScenario, count = 5): SandboxTransaction[] {
+  const now = Date.now();
+
+  if (scenario === "duplicate") {
+    // Same external_id every call, on purpose — the point is to
+    // exercise the dedup path, not to generate variety.
+    return [
+      { external_id: `SBX-DUP-${accountIdentifier}`, amount: 1000, type: "credit", status: "completed", occurred_at: new Date(now).toISOString() },
+    ];
+  }
+
+  const out: SandboxTransaction[] = [];
+  for (let n = 0; n < count; n++) {
+    const status: SandboxTransaction["status"] =
+      scenario === "success" ? "completed" : scenario === "failure" ? "failed" : n % 4 === 0 ? "failed" : "completed";
+
+    out.push({
+      external_id: `SBX-${accountIdentifier}-${n}`,
+      amount: Math.round((500 + n * 137.5) * 100) / 100,
+      type: n % 3 === 0 ? "debit" : "credit",
+      status,
+      occurred_at: new Date(now - n * 86400000).toISOString(),
+    });
+  }
+  return out;
+}

@@ -8,7 +8,7 @@ async function main() {
   const PORT = process.env.PORT || 4000;
 
   app.listen(PORT, () => {
-    console.log(`AfriCore (Phase 7) listening on :${PORT} [db: ${isPostgres ? "postgres" : "sqlite"}]`);
+    console.log(`AfriCore (Phase 9) listening on :${PORT} [db: ${isPostgres ? "postgres" : "sqlite"}]`);
   });
 }
 
